@@ -1,0 +1,10 @@
+PySide6
+ollama
+faster-whisper
+openwakeword
+sounddevice
+numpy
+piper-tts
+duckduckgo-search
+python-dotenv
+mss
