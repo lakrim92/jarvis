@@ -1,4 +1,4 @@
-from .registry import TOOLS_SCHEMA, dispatch_tool
+from .registry import TOOLS_SCHEMA, dispatch_tool, set_dispatch_hook
 from .system import register_reminder_callback
 
-__all__ = ["TOOLS_SCHEMA", "dispatch_tool", "register_reminder_callback"]
+__all__ = ["TOOLS_SCHEMA", "dispatch_tool", "register_reminder_callback", "set_dispatch_hook"]

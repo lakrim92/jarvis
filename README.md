@@ -32,6 +32,21 @@ détection du mot d'activation "Hey Jarvis" via openWakeWord, interface HUD via 
 ```
 Ou depuis le menu des applications : cherche **"Jarvis"**.
 
+## Heure réelle
+
+L'horloge du PC peut être fausse (ici : 2 h d'avance, sans synchronisation NTP). Jarvis mesure donc l'écart avec
+des serveurs de temps (NTP, sinon en-tête HTTPS), le rafraîchit toutes les 30 min et l'applique partout :
+interface, « quelle heure est-il / quel jour sommes-nous » (réponse directe), salutation, rappels et journaux
+(`clock.py`, fuseau Europe/Paris). Sans internet, il retombe sur l'horloge du PC.
+
+## Interface
+
+HUD holographique animé dans l'esprit du film, dessiné entièrement en code (aucune image protégée) :
+anneaux concentriques tournants, graduations, halo. Le cœur change de couleur selon l'état (cyan : en ligne /
+écoute, ambre : analyse, blanc-cyan : parole, bleu terne : veille) et **réagit au son** : à ta voix pendant
+l'écoute et à celle de Jarvis pendant qu'il parle. Boutons STOP (coupe la parole), TÉLÉCOMMANDE et ✕ ;
+fenêtre déplaçable à la souris.
+
 ## Utilisation
 
 - Dis **"Hey Jarvis"** (prononciation à l'anglaise) pour l'activer, puis parle
@@ -72,6 +87,58 @@ Les identifiants sont stockés dans `.secrets/` (jamais versionné).
 - **Télé LG webOS** : appairage via `aiowebostv` (accepter la demande affichée sur la télé), le jeton
   est enregistré dans `.secrets/lg_tv_token.json` (`{"host": ..., "client_key": ...}`).
 - Limite : ni la télé ni la Freebox ne peuvent être allumées depuis l'état éteint.
+
+## Reconnaissance de ta voix
+
+Jarvis peut ne répondre qu'aux voix enregistrées (la télé et les inconnus sont ignorés en silence :
+rien n'est transcrit ni gardé). Tant qu'aucune voix n'est enregistrée, il répond à tout le monde.
+
+- `enregistre ma voix` : il te fait répéter 6 phrases (dans un endroit calme, télé baissée), calcule ton
+  empreinte vocale et fixe un seuil adapté à ta voix.
+- `enregistre la voix de Marie` : ajoute une autre voix (Marie répète les phrases). `quelles voix connais-tu ?`,
+  `supprime la voix de Marie`, `mets à jour ma voix`.
+- `désactive / réactive la reconnaissance vocale` : suspend la vérification (jusqu'au redémarrage).
+- Les empreintes (données biométriques) sont dans `data/voices/`, jamais versionnées. Modèle : SpeechBrain
+  ECAPA-TDNN, calculé en local sur le processeur (~0,15 s). Le texte écrit dans le champ n'est jamais vérifié.
+- Ce n'est **pas une barrière de sécurité** : un enregistrement ou une voix clonée peut tromper le système,
+  et les phrases très courtes ou noyées dans le bruit se vérifient mal.
+- Dépendance : `speechbrain` (et `torch`).
+
+## Sommeil et interruption
+
+- `au revoir`, `bonne nuit`, `à plus tard` : Jarvis dit au revoir puis passe **en sommeil** (orbe assombri).
+- `tais-toi`, `silence`, `stop`, `ça suffit` : il se tait immédiatement et passe aussi en sommeil.
+- En sommeil, seul un « Hey Jarvis » net le réveille (seuil plus strict, `WAKEWORD_THRESHOLD_SLEEP`) ;
+  écrire dans le champ texte le réveille aussi.
+- Pendant qu'il parle, dire « Hey Jarvis » (ou cliquer sur **Stop**) l'interrompt.
+- **Salutation au réveil** : quand tu le réveilles (après un sommeil, ou au premier appel après plus de 3 h),
+  Jarvis attend 1,5 s ; si tu ne dis rien, il te salue (« Bonjour ! Que puis-je faire pour toi aujourd'hui ? »,
+  « Bonsoir » à partir de 18 h, avec ton prénom s'il le connaît). Si tu enchaînes directement ta commande
+  (« Hey Jarvis, mets M6 »), il ne te coupe pas la parole. La détection tient compte du bruit de la télé.
+- Le son capté pendant qu'il parle ou réfléchit est jeté (sinon sa propre voix ou la télé le rappelaient).
+
+## Mémoire et apprentissage
+
+Jarvis garde une mémoire **locale** (`data/jarvis.db`, jamais versionnée, conservée 180 jours) :
+journal des échanges, faits retenus, corrections apprises. Il n'y a pas de ré-entraînement du modèle :
+il se souvient et adapte ses réponses.
+
+- `souviens-toi que ...` / `appelle-moi X` / `que sais-tu de moi ?` / `oublie que ...` / `oublie tout`
+- `annule` : défait la dernière action (volume, chaîne, son)
+- `non` puis la vraie demande, ou `j'ai dit ...` : il apprend le raccourci (ex. une chaîne mal comprise)
+- `qu'as-tu appris ?`, `oublie la dernière correction`, `fais un bilan`, `mets ma chaîne préférée`
+
+## Voix
+
+Voix féminine neuronale **Kokoro** (locale) par défaut ; l'ancienne voix Piper sert de secours.
+Modèles à télécharger une fois dans `assets/kokoro/` :
+
+```
+mkdir -p assets/kokoro && cd assets/kokoro
+curl -LO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx
+curl -LO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
+```
+Pour revenir à Piper : `TTS_ENGINE = "piper"` dans `config.py`.
 
 ## Réglages utiles (`config.py`)
 

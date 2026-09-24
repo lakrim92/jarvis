@@ -4,12 +4,20 @@ training/venv/
 
 # Modeles et gros binaires telecharges (recreables via requirements.txt / scripts)
 assets/voices/*.onnx
+assets/kokoro/
+assets/spkrec-ecapa/
 training/piper-sample-generator/
 training/mit_rirs/
 training/background_clips/
 training/output/
 training/*.npy
 training/esc50.zip
+
+# Memoire de Jarvis (journal, faits, corrections) : donnees personnelles
+data/
+
+# Cache local (liste des chaines de la Freebox)
+cache/
 
 # Identifiants sensibles (Freebox, TV...)
 .secrets/

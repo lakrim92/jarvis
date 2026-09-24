@@ -26,8 +26,17 @@ class JarvisBrain:
     def reset(self):
         self.messages = [{"role": "system", "content": config.SYSTEM_PROMPT}]
 
-    def ask(self, user_text: str) -> str:
+    def load_history(self, turns: list) -> None:
+        """Reprend la conversation la ou elle s'est arretee (paires (utilisateur, reponse))."""
+        for heard, reply in turns:
+            self.messages.append({"role": "user", "content": heard})
+            self.messages.append({"role": "assistant", "content": reply})
+        self._trim_history()
+
+    def ask(self, user_text: str, context: str = "") -> str:
         """Envoie le texte utilisateur, execute les outils demandes, renvoie la reponse finale."""
+        self.messages[0] = {"role": "system",
+                            "content": config.SYSTEM_PROMPT + ("\n\nContexte actuel :\n" + context if context else "")}
         self.messages.append({"role": "user", "content": user_text})
 
         for _ in range(MAX_TOOL_ROUNDS):

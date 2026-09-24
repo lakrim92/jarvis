@@ -10,3 +10,6 @@ python-dotenv
 mss
 aiowebostv
 androidtvremote2
+kokoro-onnx
+soundfile
+speechbrain

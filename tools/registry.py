@@ -1,5 +1,5 @@
 """Declaration des outils exposes au LLM (function calling Ollama) + dispatch."""
-from . import apps, web, system, organize, lg_tv, freebox_remote
+from . import apps, web, system, organize, lg_tv, freebox_remote, freebox_channels
 
 
 def _dispatch_tv_control(args: dict) -> dict:
@@ -24,9 +24,15 @@ def _dispatch_tv_control(args: dict) -> dict:
     if action == "channel_down":
         return freebox_remote.fb_button("CHANNELDOWN", int(value or 1))
     if action == "goto_channel":
-        return freebox_remote.fb_goto_channel(value)
+        if str(value).strip().isdigit():
+            return freebox_remote.fb_goto_channel(value)
+        channel = freebox_channels.find_channel(str(value))
+        if not channel:
+            return {"success": False, "error": f"Chaine introuvable dans la liste de la Freebox : {value}"}
+        result = freebox_remote.fb_goto_channel(channel["number"])
+        return {**result, "name": channel["name"]}
     if action == "button":
-        return freebox_remote.fb_button(value)
+        return freebox_remote.fb_button(value, int(args.get("repeat", 1)))
     if action == "status":
         return lg_tv.tv_status()
     return {"success": False, "error": f"Action TV inconnue : {action}"}
@@ -129,7 +135,7 @@ TOOLS_SCHEMA = [
                         "type": "string",
                         "description": "Pour 'set_volume' : niveau 0-100. Pour 'launch_app' : nom de l'application. "
                                        "Pour 'channel_up'/'channel_down' : nombre de chaines a sauter (defaut 1). "
-                                       "Pour 'goto_channel' : numero de chaine (ex: '6'). "
+                                       "Pour 'goto_channel' : nom (ex: 'Paris Premiere', 'BFM TV') ou numero de chaine. "
                                        "Pour 'button' (Freebox) : UP, DOWN, LEFT, RIGHT, ENTER, BACK, HOME, MENU, INFO, GUIDE, TV, VOLUMEUP, VOLUMEDOWN, MUTE (volume du Player = celui qu'on entend).",
                     },
                 },
@@ -239,11 +245,27 @@ _DISPATCH = {
 }
 
 
+_dispatch_hook = None
+
+
+def set_dispatch_hook(callback) -> None:
+    """callback(nom_outil, arguments, resultat) : appele apres chaque outil execute (journal d'apprentissage)."""
+    global _dispatch_hook
+    _dispatch_hook = callback
+
+
 def dispatch_tool(name: str, arguments: dict) -> dict:
     handler = _DISPATCH.get(name)
     if not handler:
-        return {"success": False, "error": f"Outil inconnu : {name}"}
-    try:
-        return handler(arguments or {})
-    except Exception as exc:
-        return {"success": False, "error": str(exc)}
+        result = {"success": False, "error": f"Outil inconnu : {name}"}
+    else:
+        try:
+            result = handler(arguments or {})
+        except Exception as exc:
+            result = {"success": False, "error": str(exc)}
+    if _dispatch_hook:
+        try:
+            _dispatch_hook(name, arguments or {}, result)
+        except Exception:
+            pass
+    return result

@@ -4,6 +4,8 @@ import subprocess
 import threading
 from datetime import datetime, timedelta
 
+import clock
+
 # Callback branche par main.py pour notifier (voix + GUI) quand un rappel se declenche.
 _reminder_callback = None
 
@@ -86,7 +88,7 @@ def take_screenshot() -> dict:
 
 
 def get_datetime() -> dict:
-    now = datetime.now()
+    now = clock.now()
     jours = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
     return {
         "success": True,
@@ -107,7 +109,7 @@ def set_reminder(seconds: int, message: str) -> dict:
                 _reminder_callback(message)
 
         threading.Timer(seconds, fire).start()
-        trigger_at = datetime.now() + timedelta(seconds=seconds)
+        trigger_at = clock.now() + timedelta(seconds=seconds)
         return {"success": True, "message": message, "trigger_at": trigger_at.strftime("%H:%M:%S")}
     except Exception as exc:
         return {"success": False, "error": str(exc)}
