@@ -45,6 +45,8 @@ class JarvisBrain:
                     model=self.model,
                     messages=self.messages,
                     tools=TOOLS_SCHEMA,
+                    options={"num_predict": 300, "temperature": 0.4},
+                    keep_alive="30m",
                 )
             except Exception as exc:
                 log.exception("Erreur Ollama")

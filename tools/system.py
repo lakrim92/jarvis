@@ -98,17 +98,13 @@ def get_datetime() -> dict:
 
 
 def set_reminder(seconds: int, message: str) -> dict:
-    """Programme un rappel qui sera annonce dans `seconds` secondes."""
+    """Programme un rappel (durable : survit a un redemarrage) annonce dans `seconds` secondes."""
+    import reminders
     try:
         seconds = int(seconds)
         if seconds <= 0:
             return {"success": False, "error": "La duree doit etre positive."}
-
-        def fire():
-            if _reminder_callback:
-                _reminder_callback(message)
-
-        threading.Timer(seconds, fire).start()
+        reminders.add(clock.timestamp() + seconds, message, "reminder")
         trigger_at = clock.now() + timedelta(seconds=seconds)
         return {"success": True, "message": message, "trigger_at": trigger_at.strftime("%H:%M:%S")}
     except Exception as exc:

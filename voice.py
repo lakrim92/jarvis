@@ -74,7 +74,8 @@ class VoiceProfiles:
                 d = json.loads(f.read_text())
                 self.profiles[d["name"]] = {
                     "centroid": np.array(d["centroid"], dtype=np.float32),
-                    "threshold": float(d["threshold"]), "samples": d.get("samples", 0)}
+                    "threshold": _threshold(d["mean_intra"]) if "mean_intra" in d else float(d["threshold"]),
+                    "samples": d.get("samples", 0)}
             except Exception:
                 log.exception("Profil vocal illisible : %s", f)
 
@@ -96,7 +97,7 @@ class VoiceProfiles:
             others = np.mean([x for j, x in enumerate(embs) if j != i], axis=0)
             intra.append(float(np.dot(e, others / np.linalg.norm(others))))
         mean_intra = float(np.mean(intra))
-        threshold = float(np.clip(0.5 * mean_intra + 0.05, THRESHOLD_MIN, THRESHOLD_MAX))
+        threshold = _threshold(mean_intra)
         data = {"name": name, "centroid": centroid.tolist(), "threshold": threshold, "samples": len(embs),
                 "mean_intra": mean_intra, "min_intra": float(min(intra)), "ts": time.time()}
         (PROFILES_DIR / f"{_slug(name)}.json").write_text(json.dumps(data))
@@ -111,20 +112,30 @@ class VoiceProfiles:
         return existed
 
     # ------------------------------------------------------------------ verification
-    def identify(self, audio: np.ndarray):
-        """Renvoie (nom | None, meilleur_score, raison). raison : 'ok', 'trop_court' ou 'inconnue'."""
+    def identify(self, audio: np.ndarray, wake_audio: Optional[np.ndarray] = None, relax: float = 0.0):
+        """Renvoie (nom | None, meilleur_score, raison). raison : 'ok', 'trop_court' ou 'inconnue'.
+        `wake_audio` : le « Hey Jarvis » lui-meme, ajoute a la commande (les commandes tres courtes,
+        comme « quelle heure ? », ne contiennent pas assez de voix a elles seules).
+        `relax` : tolerance sur le seuil (reponse a une question de Jarvis : sans « Hey Jarvis », donc moins de voix)."""
         speech = trim_speech(audio)
+        if wake_audio is not None and wake_audio.size:
+            speech = np.concatenate([trim_speech(wake_audio), speech])
         if speech.size < MIN_SPEECH_SECONDS * SAMPLE_RATE:
-            return None, 0.0, "trop_court"
+            return None, speech.size / SAMPLE_RATE, "trop_court"
         emb = self.embed(speech)
         best_name, best_score, best_margin = None, -1.0, -1.0
         for name, prof in self.profiles.items():
             score = float(np.dot(emb, prof["centroid"]))
-            if score - prof["threshold"] > best_margin:
-                best_name, best_score, best_margin = name, score, score - prof["threshold"]
+            if score - (prof["threshold"] - relax) > best_margin:
+                best_name, best_score, best_margin = name, score, score - (prof["threshold"] - relax)
         if best_name is not None and best_margin >= 0:
             return best_name, best_score, "ok"
         return None, max(best_score, 0.0), "inconnue"
+
+
+def _threshold(mean_intra: float) -> float:
+    """Seuil de reconnaissance : la moitie de la coherence de la voix enregistree (voix etrangeres : ~0,0-0,3)."""
+    return float(np.clip(0.5 * mean_intra, THRESHOLD_MIN, THRESHOLD_MAX))
 
 
 def _slug(name: str) -> str:

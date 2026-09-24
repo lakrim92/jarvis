@@ -6,12 +6,16 @@ import re
 import threading
 import time
 import sys
+from pathlib import Path
+
+import numpy as np
 
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import QApplication
 
 import clock
 import config
+import reminders
 from audio_io import WakeWordListener, SpeechTranscriber, Speaker
 from brain import JarvisBrain
 from gui import JarvisWindow
@@ -35,6 +39,10 @@ logging.Formatter.converter = staticmethod(clock.localtime)   # journaux en heur
 log = logging.getLogger("jarvis.main")
 
 GREET_AFTER_SECONDS = 3 * 3600   # au-dela, le prochain appel est salue comme un nouveau reveil
+ACTION_REQUEST = re.compile(
+    r"\b(ouvre|ouvrir|lance|lancer|affiche|range|trie|organise|ferme|fermer|mets|met|baisse|monte|augmente|diminue|"
+    r"[ée]teins|allume|coupe|verrouille|capture|prends une capture|cherche|recherche)\b|cha[iî]ne|volume|luminosit", re.I)
+FOLLOW_UP_SECONDS = 10           # attente de la reponse apres une question de Jarvis
 
 
 class AssistantWorker(QThread):
@@ -58,6 +66,8 @@ class AssistantWorker(QThread):
         self.voice = None
         self.voice_paused = False
         self._pending_enroll = None
+        self.last_speaker = None
+        self.last_reply = ""
         self.last_activity = None   # dernier echange (None : rien depuis le demarrage)
 
     def submit_text(self, text: str):
@@ -77,8 +87,19 @@ class AssistantWorker(QThread):
         if kind == "stop":
             self.speaker.stop()
 
+    @staticmethod
+    def _speakable(text: str) -> str:
+        """Le texte lu a voix haute : ni code, ni symboles markdown (ils restent affiches dans la fenetre)."""
+        had_code = "```" in text
+        text = re.sub(r"```.*?```", " ", text, flags=re.S)
+        text = re.sub(r"`([^`]*)`", r"\1", text)
+        text = re.sub(r"[*_#>]+", "", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text + (" Je t'ai mis le détail à l'écran." if had_code else "")
+
     def _speak(self, text: str) -> bool:
         """Lit `text` ; renvoie True si l'utilisateur a coupe la parole en appelant Jarvis."""
+        text = self._speakable(text)
         done, barged = threading.Event(), []
 
         def watch():
@@ -114,7 +135,8 @@ class AssistantWorker(QThread):
         self.learner = Learner(self.memory, dispatch_tool)
         set_dispatch_hook(self.learner.on_dispatch)
         self.brain.load_history(self.memory.recent_turns(6))
-        register_reminder_callback(self._on_reminder)
+        self.due_reminders = queue.Queue()
+        reminders.start(self.due_reminders.put)      # dit a voix haute quand l'heure est venue (voir run)
         register_session_callback(self._on_session)
         register_voice_callback(self._on_voice_command)
         self.voice = VoiceProfiles()
@@ -127,10 +149,11 @@ class AssistantWorker(QThread):
         self.listener.start()
         log.info("Jarvis est pret.")
 
-    def _on_reminder(self, message: str):
-        self.message_ready.emit("assistant", f"[Rappel] {message}")
+    def _announce_reminder(self, text: str):
+        log.info("Rappel : %s", text)
+        self.message_ready.emit("assistant", f"[Rappel] {text}")
         self.state_changed.emit("speaking")
-        self._speak(f"Rappel : {message}")
+        self._speak(text)
         self.listener.flush()
         self.state_changed.emit("sleeping" if self.sleeping else "idle")
 
@@ -183,7 +206,7 @@ class AssistantWorker(QThread):
                 self.speaker.say(prompt)
                 self.listener.flush()
                 self.state_changed.emit("listening")
-                audio = self.listener.record_command(on_level=self.level.emit)
+                audio = self.listener.record_command(on_level=self.level.emit, max_seconds=15, silence_seconds=2.0)
                 if trim_speech(audio).size >= 1.5 * config.SAMPLE_RATE:
                     samples.append(audio)
                     break
@@ -213,12 +236,24 @@ class AssistantWorker(QThread):
         if reply is not None:
             return reply, "direct"
         self.learner.turn_actions = []
+        mark = len(self.brain.messages)
+        slow = threading.Timer(5.0, lambda: self.notice.emit("Je réfléchis, un instant…"))
+        slow.start()
         reply = self.brain.ask(text, self.learner.context())
         # Le petit modele annonce parfois une action sans avoir appele d'outil : on ne laisse pas passer ca.
-        if not self.learner.turn_actions and re.search(
-                r"cha[iî]ne|volume|\bson\b|t[ée]l[ée]|freebox|player|luminosit|zapp", text, re.I):
-            reply = ("Je n'ai pas réussi à faire ça, je n'ai pas bien compris. Tu peux reformuler ? "
-                     "Par exemple « chaîne suivante » ou « mets M6 ».")
+        if not self.learner.turn_actions and ACTION_REQUEST.search(text):
+            del self.brain.messages[mark:]
+            log.info("Action demandee mais aucun outil appele : nouvelle tentative")
+            reply = self.brain.ask(text + "\n(Exécute cette demande en appelant l'outil adapté, sans juste répondre.)",
+                                   self.learner.context())
+            if not self.learner.turn_actions:
+                del self.brain.messages[mark:]      # la fausse promesse ne doit pas rester dans l'historique
+                if re.search(r"cha[iî]ne|volume|\bson\b|t[ée]l[ée]|freebox|player|luminosit|zapp", text, re.I):
+                    reply = ("Je n'ai pas réussi à faire ça, je n'ai pas bien compris. Tu peux reformuler ? "
+                             "Par exemple « chaîne suivante » ou « mets M6 ».")
+                else:
+                    reply = "Je n'ai pas réussi à faire ça. Tu peux me le redire autrement ?"
+        slow.cancel()
         return reply, "llm"
 
     def _handle_user_text(self, text: str):
@@ -228,6 +263,7 @@ class AssistantWorker(QThread):
         self.sleeping = False            # tout message adresse a Jarvis le reveille
         reply = self.learner.respond(text, self._pipeline)
         log.info("Reponse: %s", reply or "(silence)")
+        self.last_reply = reply or ""
         barged = False
         if reply:
             self.message_ready.emit("assistant", reply)
@@ -243,14 +279,37 @@ class AssistantWorker(QThread):
             self.last_activity = time.time()
         if barged:
             self._handle_voice_command()   # l'utilisateur a repris la parole
+        elif reply and not self.sleeping and self._expects_answer(reply):
+            self._await_answer()           # Jarvis a pose une question : on attend la reponse
 
     def _needs_greeting(self, from_sleep: bool) -> bool:
         return from_sleep or self.last_activity is None or time.time() - self.last_activity > GREET_AFTER_SECONDS
+
+    def _dump_debug_clip(self, wake_audio, audio, who, score) -> None:
+        """Garde les 8 derniers enregistrements verifies (data/debug/, jamais versionne) pour comprendre les refus."""
+        try:
+            import wave
+            folder = Path(__file__).resolve().parent / "data" / "debug"
+            folder.mkdir(parents=True, exist_ok=True)
+            for old in sorted(folder.glob("*.wav"))[:-15]:
+                old.unlink()
+            for tag, clip in (("wake", wake_audio), ("cmd", audio)):
+                pcm = (np.clip(clip, -1, 1) * 32767).astype(np.int16)
+                stamp = clock.now().strftime("%H%M%S")
+                with wave.open(str(folder / f"{stamp}_{'ok' if who else 'refus'}{score:.2f}_{tag}.wav"), "wb") as w:
+                    w.setnchannels(1); w.setsampwidth(2); w.setframerate(config.SAMPLE_RATE); w.writeframes(pcm.tobytes())
+            log.info("Niveaux : wake rms=%.3f (%.1fs), commande rms=%.3f (%.1fs), ambiant=%.0f",
+                     float(np.sqrt(np.mean(wake_audio ** 2))) if wake_audio.size else 0, wake_audio.size / config.SAMPLE_RATE,
+                     float(np.sqrt(np.mean(audio ** 2))) if audio.size else 0, audio.size / config.SAMPLE_RATE,
+                     self.listener.ambient_level())
+        except Exception:
+            log.exception("Sauvegarde de debogage impossible")
 
     def _handle_voice_command(self, from_sleep: bool = False):
         log.info("Mot d'activation detecte (score %.2f)%s", self.listener.last_score,
                  " [reveil du sommeil]" if from_sleep else "")
         self.state_changed.emit("listening")
+        wake_audio = self.listener.wake_audio()
         initial = None
         if self._needs_greeting(from_sleep):
             spoke, frames = self.listener.probe_speech(1.5)
@@ -266,29 +325,69 @@ class AssistantWorker(QThread):
                 self.state_changed.emit("listening")
             self.last_activity = time.time()
         audio = self.listener.record_command(initial, on_level=self.level.emit)
+        self._verify_and_handle(audio, wake_audio)
+
+    def _verify_and_handle(self, audio, wake_audio, follow_up: bool = False) -> str:
+        """Verifie la voix puis traite la commande. Renvoie 'traite', 'refuse' ou 'vide'.
+        `follow_up` : reponse a une question de Jarvis (pas de « Hey Jarvis » avant, donc parfois tres courte)."""
         self.learner.speaker = None
+        verified = False
         if self._verification_active():
             self.state_changed.emit("thinking")
-            who, score, why = self.voice.identify(audio)
-            if who is None:
+            who, score, why = self.voice.identify(audio, wake_audio, relax=0.08 if follow_up else 0.0)
+            self._dump_debug_clip(wake_audio, audio, who, score)
+            if who is None and follow_up and why == "trop_court":
+                # « oui », « non »... : trop court pour une empreinte fiable, on l'accepte seulement s'il reste bref.
+                log.info("Reponse courte sans verification vocale (%.1f s de voix)", score)
+                who = self.last_speaker
+            elif who is None:
                 # Voix inconnue (ou television) : on ne transcrit rien et on ne garde aucune trace.
                 if why == "trop_court":
-                    log.info("Voix non verifiable : phrase trop courte")
+                    log.info("Voix non verifiable : phrase trop courte (%.1f s de voix)", score)
                     self.notice.emit("Trop court pour reconnaître ta voix")
                 else:
                     log.info("Voix non reconnue (score %.2f) : ignoree", score)
                     self.notice.emit("Voix non reconnue")
                 self.listener.flush()
-                self.state_changed.emit("sleeping" if self.sleeping else "idle")
-                return
-            log.info("Voix reconnue : %s (score %.2f)", who, score)
+                if not follow_up:
+                    self.state_changed.emit("sleeping" if self.sleeping else "idle")
+                return "refuse"
+            else:
+                verified = True
+                log.info("Voix reconnue : %s (score %.2f)", who, score)
+                self.last_speaker = who
             self.learner.speaker = who
         self.state_changed.emit("thinking")
-        text = self.transcriber.transcribe(audio)
+        text = self.transcriber.transcribe(audio, self.last_reply if follow_up else "")
         if not text:
-            self.state_changed.emit("idle")
-            return
+            if not follow_up:
+                self.state_changed.emit("idle")
+            return "vide"
+        if follow_up and self._verification_active() and not verified and len(text.split()) > 4:
+            log.info("Reponse longue non verifiee, ignoree : %s", text)
+            self.listener.flush()
+            return "refuse"
         self._handle_user_text(text)
+        return "traite"
+
+    @staticmethod
+    def _expects_answer(reply: str) -> bool:
+        return bool(reply) and reply.strip().rstrip(" \"'»”)*").endswith("?")
+
+    def _await_answer(self):
+        """Jarvis vient de poser une question : il ecoute la reponse sans exiger « Hey Jarvis »."""
+        deadline = time.time() + FOLLOW_UP_SECONDS
+        self.state_changed.emit("listening")
+        self.notice.emit("Je t'écoute…")
+        while time.time() < deadline and not self._stop and self.text_queue.empty():
+            spoke, frames = self.listener.probe_speech(1.0)
+            if not spoke:
+                continue
+            audio = self.listener.record_command(frames, on_level=self.level.emit)
+            if self._verify_and_handle(audio, np.zeros(0, dtype=np.float32), follow_up=True) != "refuse":
+                return
+        self.state_changed.emit("sleeping" if self.sleeping else "idle")
+        self.last_activity = time.time()
 
     def run(self):
         try:
@@ -300,6 +399,12 @@ class AssistantWorker(QThread):
 
         self.state_changed.emit("idle")
         while not self._stop:
+            try:
+                self._announce_reminder(self.due_reminders.get_nowait())
+                continue
+            except queue.Empty:
+                pass
+
             try:
                 typed = self.text_queue.get_nowait()
             except queue.Empty:

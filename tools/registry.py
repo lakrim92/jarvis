@@ -56,6 +56,39 @@ TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
+            "name": "create_spreadsheet",
+            "description": "Cree un tableau (fichier tableur .xlsx dans Documents) avec un nombre de colonnes et de lignes, "
+                           "puis l'ouvre dans LibreOffice Calc. A utiliser pour toute demande de creation de tableau.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "columns": {"type": "integer", "description": "Nombre de colonnes."},
+                    "rows": {"type": "integer", "description": "Nombre de lignes (hors en-tete)."},
+                    "headers": {"type": "array", "items": {"type": "string"}, "description": "Titres des colonnes (optionnel)."},
+                    "title": {"type": "string", "description": "Nom du fichier (optionnel)."},
+                },
+                "required": ["columns", "rows"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "close_window",
+            "description": "Ferme une fenetre ouverte (application ou dossier) d'apres son nom. "
+                           "Pour fermer les fenetres de dossiers : folders=true.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Nom de l'application ou du dossier a fermer."},
+                    "folders": {"type": "boolean", "description": "true pour fermer des fenetres de dossiers."},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "open_path",
             "description": "Ouvre un fichier ou un dossier avec l'application par defaut (equivalent d'un double-clic).",
             "parameters": {
@@ -230,6 +263,9 @@ TOOLS_SCHEMA = [
 
 _DISPATCH = {
     "open_application": lambda args: apps.open_application(args["name"]),
+    "create_spreadsheet": lambda args: apps.create_spreadsheet(
+        args.get("columns", 3), args.get("rows", 10), args.get("headers"), args.get("title", "")),
+    "close_window": lambda args: apps.close_window(args.get("name", ""), bool(args.get("folders", False))),
     "open_path": lambda args: apps.open_path(args["path"]),
     "web_search": lambda args: web.web_search(args["query"], args.get("num_results", 5)),
     "get_distance": lambda args: web.get_distance(args["origin"], args["destination"]),

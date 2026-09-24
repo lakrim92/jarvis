@@ -13,3 +13,4 @@ androidtvremote2
 kokoro-onnx
 soundfile
 speechbrain
+openpyxl

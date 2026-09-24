@@ -32,6 +32,7 @@ class WakeWordListener:
         self._q = queue.Queue()
         self.last_score = 0.0
         self._levels = collections.deque(maxlen=60)   # niveaux recents (~5 s) : bruit ambiant
+        self._recent = collections.deque(maxlen=20)   # derniers blocs (~1,6 s) : contient le « Hey Jarvis » prononce
 
     def _callback(self, indata, frames, time_info, status):
         if status:
@@ -61,7 +62,14 @@ class WakeWordListener:
         with self._q.mutex:
             self._q.queue.clear()
         self._levels.clear()
+        self._recent.clear()
         self.model.reset()
+
+    def wake_audio(self) -> np.ndarray:
+        """Son juste avant la detection (le mot d'activation lui-meme), pour verifier la voix de celui qui l'a dit."""
+        if not self._recent:
+            return np.array([], dtype=np.float32)
+        return np.concatenate(list(self._recent)).astype(np.float32) / 32768.0
 
     def ambient_level(self) -> float:
         """Niveau median du son ambiant (television...) juste avant l'appel ; 0 si trop peu de mesures."""
@@ -74,6 +82,7 @@ class WakeWordListener:
         except queue.Empty:
             return False
         audio = chunk.reshape(-1)
+        self._recent.append(audio.copy())
         self._levels.append(float(np.sqrt(np.mean(audio.astype(np.float32) ** 2))))
         predictions = self.model.predict(audio)
         score = predictions.get(config.WAKEWORD_MODEL_NAME, 0.0)
@@ -97,15 +106,15 @@ class WakeWordListener:
                 return True, frames
         return False, frames
 
-    def record_command(self, initial_frames=None, on_level=None) -> np.ndarray:
+    def record_command(self, initial_frames=None, on_level=None, max_seconds=None, silence_seconds=None) -> np.ndarray:
         """Enregistre la commande vocale apres le mot d'activation, s'arrete au silence.
         `initial_frames` : blocs deja lus par probe_speech (l'utilisateur parlait deja)."""
         frames = []
         pending = list(initial_frames) if initial_frames else []
         silence_frames_needed = int(
-            config.SILENCE_DURATION_SECONDS * config.SAMPLE_RATE / config.FRAME_SIZE
+            (silence_seconds or config.SILENCE_DURATION_SECONDS) * config.SAMPLE_RATE / config.FRAME_SIZE
         )
-        max_frames = int(config.MAX_COMMAND_SECONDS * config.SAMPLE_RATE / config.FRAME_SIZE)
+        max_frames = int((max_seconds or config.MAX_COMMAND_SECONDS) * config.SAMPLE_RATE / config.FRAME_SIZE)
 
         silence_run = 0
         speech_started = False
@@ -142,6 +151,22 @@ class WakeWordListener:
         return audio_int16.astype(np.float32) / 32768.0
 
 
+_HALLUCINATION = re.compile(
+    r"abonn(?:er|ez|e)\b.*\b(?:cha[iî]ne|vid[eé]o)|n.oubliez pas de (?:vous )?abonner|sous-?titr|"
+    r"merci d.avoir (?:regard|suivi)|amara\.org|à la prochaine vid", re.I)
+
+
+# Indice de vocabulaire donne a Whisper (mots, pas des phrases de commande : sinon il pourrait les recopier).
+_VOCABULARY = ("Jarvis, chaîne, volume, télé, Freebox, rappel, minuteur, alarme, météo, ouvre, ferme, cherche, "
+               "LibreOffice, Writer, Calc, Firefox, dossier.")
+
+
+def _fold_words(text: str) -> str:
+    import unicodedata
+    text = "".join(c for c in unicodedata.normalize("NFD", text.lower()) if unicodedata.category(c) != "Mn")
+    return " ".join(re.sub(r"[^a-z0-9 ]", " ", text).split())
+
+
 class SpeechTranscriber:
     """Transcription via faster-whisper."""
 
@@ -155,16 +180,37 @@ class SpeechTranscriber:
             compute_type=config.WHISPER_COMPUTE_TYPE,
         )
 
-    def transcribe(self, audio_float32: np.ndarray) -> str:
+    def transcribe(self, audio_float32: np.ndarray, context: str = "") -> str:
+        """`context` : ce que Jarvis vient de dire (sa question) : aide Whisper a comprendre une reponse courte."""
         if audio_float32.size == 0:
             return ""
+        prompt = _VOCABULARY + (" " + context.strip()[-200:] if context.strip() else "")
+        folded_prompt = _fold_words(prompt)
         segments, _ = self.model.transcribe(
             audio_float32,
             language=config.WHISPER_LANGUAGE,
             beam_size=5,
             vad_filter=True,
+            initial_prompt=prompt,
+            condition_on_previous_text=False,
         )
-        return " ".join(seg.text.strip() for seg in segments).strip()
+        kept = []
+        for seg in segments:
+            # Whisper invente du texte sur un fond sans parole (« n'oubliez pas de vous abonner »...) :
+            # on ecarte les segments qu'il juge lui-meme peu probables ou qui sont des tics connus.
+            if seg.no_speech_prob > 0.6 and seg.avg_logprob < -0.8:
+                log.info("Segment ignore (pas de parole probable) : %s", seg.text.strip())
+                continue
+            words = _fold_words(seg.text)
+            if (len(words.split()) >= 3 and words in folded_prompt
+                    and (seg.no_speech_prob > 0.3 or seg.avg_logprob < -0.7)):
+                log.info("Segment ignore (Whisper a recopie le contexte) : %s", seg.text.strip())
+                continue
+            if _HALLUCINATION.search(seg.text):
+                log.info("Segment ignore (hallucination connue) : %s", seg.text.strip())
+                continue
+            kept.append(seg.text.strip())
+        return " ".join(kept).strip()
 
 
 class Speaker:

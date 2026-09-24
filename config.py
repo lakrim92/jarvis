@@ -28,7 +28,7 @@ def _gpu_available() -> bool:
 
 GPU_AVAILABLE = _gpu_available()
 WHISPER_DEVICE = "cuda" if GPU_AVAILABLE else "cpu"
-WHISPER_COMPUTE_TYPE = "float16" if GPU_AVAILABLE else "int8"
+WHISPER_COMPUTE_TYPE = "int8_float16" if GPU_AVAILABLE else "int8"   # moins de memoire GPU : le LLM en garde plus
 # "small" = bon compromis. Passe a "medium" si le GPU est actif pour plus de precision.
 WHISPER_MODEL_SIZE = "medium" if GPU_AVAILABLE else "small"
 
@@ -62,12 +62,14 @@ SILENCE_RMS_THRESHOLD = 350  # empirique sur int16, a ajuster si besoin
 # Des qu'une voix est enregistree, Jarvis ignore toute voix non reconnue (television comprise).
 SPEAKER_VERIFICATION = True
 ENROLL_PHRASES = [
+    "Hey Jarvis, quelle heure est-il ?",
+    "Hey Jarvis, augmente le volume.",
+    "Hey Jarvis, passe à la chaîne suivante.",
+    "Hey Jarvis, cherche la météo de demain.",
+    "Hey Jarvis, ouvre le navigateur, s'il te plaît.",
+    "Hey Jarvis, rappelle-moi de téléphoner à mes amis demain soir.",
     "Bonjour Jarvis, comment vas-tu aujourd'hui ?",
-    "Peux-tu mettre la chaîne six et baisser un peu le volume ?",
-    "Il fait beau ce matin, j'aimerais bien sortir me promener.",
-    "Rappelle-moi de téléphoner à mes amis demain soir.",
-    "Quatre-vingt-dix-sept, trente-deux, quinze, soixante et onze.",
-    "Ouvre le navigateur et cherche la météo du week-end.",
+    "Hey Jarvis, mets la chaîne six et baisse un peu le volume.",
 ]
 
 # --- Assistant ---

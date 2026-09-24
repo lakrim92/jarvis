@@ -7,9 +7,11 @@ import random
 import re
 import time
 import unicodedata
+from pathlib import Path
 from typing import Optional
 
 import clock
+import reminders
 from tools import dispatch_tool, freebox_channels
 
 
@@ -106,8 +108,152 @@ def _mute(mute: bool, target: str) -> str:
     return f"Son de l'ordinateur {verb}."
 
 
+_FOLDERS = (
+    (r"images?|photos?|pictures?", "Images", "tes images"),
+    (r"telechargements?|downloads?", "Téléchargements", "tes téléchargements"),
+    (r"documents?", "Documents", "tes documents"),
+    (r"bureau", "Bureau", "ton bureau"),
+    (r"musiques?", "Musique", "ta musique"),
+    (r"videos?", "Vidéos", "tes vidéos"),
+    (r"jarvis", "jarvis", "le dossier de Jarvis"),
+    (r"personnel|home|maison", "", "ton dossier personnel"),
+)
+
+
+def _open_folder(t: str) -> Optional[str]:
+    """« ouvre le dossier images », « affiche-moi mes téléchargements » : action directe (le petit modele
+    annoncait parfois l'ouverture sans rien faire)."""
+    verb = r"\b(?:ouvre|ouvrir|affiche|afficher|montre|montrer|va dans|va sur|lance)(?: moi)?\b"
+    if not re.search(verb, t):
+        return None
+    for names, folder, label in _FOLDERS:
+        explicit = rf"\b(?:dossier|repertoire)\s+(?:de |des |du |d |mes |les |le |la )?(?:{names})\b"
+        direct = rf"{verb}\s+(?:mes |les |le |la |mon |ma )(?:{names}) $"
+        if re.search(explicit, t) or re.search(direct, t):
+            path = str(Path.home() / folder)
+            result = dispatch_tool("open_path", {"path": path})
+            return f"Voilà, j'ouvre {label}." if result.get("success") else f"Je n'ai pas réussi à ouvrir {label}."
+    return None
+
+
+# Ce que Whisper entend / ce que l'utilisateur dit -> nom exact de l'application (fichier .desktop)
+_APP_OPEN = (
+    (r"writer|\bword\b|traitement de texte", "LibreOffice Writer", "Writer"),
+    (r"\bcalc\b|excel|tableur", "LibreOffice Calc", "Calc"),
+    (r"impress|power ?point|presentation|diaporama", "LibreOffice Impress", "Impress"),
+    (r"libre ?office|libre fils|libre offis|libre ofice|open office|\boffice\b", "LibreOffice Start Center", "LibreOffice"),
+    (r"navigateur|internet|firefox|le web", "Firefox ESR", "Firefox"),
+    (r"terminal|console", "Terminal", "le terminal"),
+    (r"calculatrice|calculette", "Calculator", "la calculatrice"),
+    (r"vlc|lecteur video", "VLC media player", "VLC"),
+    (r"gestionnaire de fichiers|explorateur", "Files", "l'explorateur de fichiers"),
+)
+
+
+def _spreadsheet(t: str) -> Optional[str]:
+    """« crée un tableau à quatre colonnes et dix lignes » -> fichier tableur ouvert dans Calc."""
+    if not re.search(r"\b(cree|creer|fais|faire|genere|generer|prepare|construis|fabrique|ouvre|mets?)\b.*\b(tableau|tableur|feuille de calcul)\b", t):
+        return None
+    num = r"(\d+|[a-z]+(?: [a-z]+){0,2})"
+    cols = re.search(rf"{num} colonnes?", t)
+    rows = re.search(rf"{num} lignes?", t)
+    n_cols = _to_int(cols.group(1)) if cols else None
+    n_rows = _to_int(rows.group(1)) if rows else None
+    if n_cols is None and n_rows is None:
+        return None                     # pas de dimensions : « ouvre le tableur » est gere ailleurs
+    result = dispatch_tool("create_spreadsheet", {"columns": n_cols or 3, "rows": n_rows or 10})
+    if not result.get("success"):
+        return "Je n'ai pas réussi à créer le tableau."
+    return f"Voilà, j'ai créé un tableau de {result['columns']} colonnes et {result['rows']} lignes dans Calc. Il est dans ton dossier Documents."
+
+
+def _to_int(s: str) -> Optional[int]:
+    import reminders
+    tokens = s.split()
+    for size in range(min(3, len(tokens)), 0, -1):        # « quatre », « vingt et un » : dernier groupe de mots avant l'unite
+        value = reminders.words_to_int(" ".join(tokens[-size:]))
+        if value:
+            return value
+    return None
+
+
+def _open_app(t: str) -> Optional[str]:
+    """« ouvre LibreOffice », « lance le navigateur » : lancement direct."""
+    m = re.search(r"\b(?:ouvre|ouvrir|lance|lancer|demarre|demarrer)(?: moi)?\b(.*)$", t)
+    if not m or re.search(r"dossier|repertoire|fichier |telecommande", t):
+        return None
+    target = " ".join(re.sub(r"\b(?:le|la|l|les|un|une|mon|ma|s il te plait|application|appli|programme|logiciel)\b", " ",
+                             m.group(1)).split())
+    if not target:
+        return None
+    for pattern, app, label in _APP_OPEN:
+        if re.search(pattern, target):
+            result = dispatch_tool("open_application", {"name": app})
+            return f"Voilà, j'ouvre {label}." if result.get("success") else f"Je n'ai pas réussi à ouvrir {label}."
+    return None
+
+
+_APP_ALIASES = {"navigateur": "firefox", "internet": "firefox", "firefox": "firefox", "chrome": "chrome",
+                "explorateur": "", "fichiers": ""}
+
+
+def _close_window(t: str) -> Optional[str]:
+    """« ferme le dossier », « ferme le dossier images », « ferme firefox »."""
+    m = re.search(r"\b(?:ferme|fermer|quitte|quitter)(?: moi)?\b(.*)$", t)
+    if not m or "telecommande" in t or "jarvis" in t:
+        return None
+    target = re.sub(r"\b(?:le|la|l|les|mon|ma|mes|cette|ce|cet|de|des|du|d|s il te plait|application|appli|programme|fenetre|"
+                    r"fenetres|windows?)\b", " ", m.group(1))
+    target = " ".join(target.split())
+    if re.search(r"tele|freebox|player|ecran|ordinateur|session|volet|porte|lumiere|son\b|musique en cours", target):
+        return None                                         # pas une fenetre : on laisse les autres regles / le modele
+    if re.fullmatch(r"(?:dossiers?|repertoires?|explorateur|explorateur de fichiers|gestionnaire de fichiers|fichiers|)", target):
+        if not target and "fenetre" not in m.group(1):
+            return None                                     # « ferme » tout seul : trop vague
+        if not target:
+            return None                                     # « ferme la fenetre » : laquelle ?
+        result = dispatch_tool("close_window", {"folders": True})
+        return "C'est fermé." if result.get("success") else "Je ne vois aucun dossier ouvert."
+    target = re.sub(r"^(?:dossiers?|repertoires?) ", "", target)
+    for names, folder, label in _FOLDERS:
+        if re.fullmatch(names, target):
+            title = folder or Path.home().name
+            result = dispatch_tool("close_window", {"name": title, "folders": True})
+            return "C'est fermé." if result.get("success") else f"Je ne vois pas {label} ouvert."
+    if target in _APP_ALIASES or re.fullmatch(r"[a-z0-9 ]{3,30}", target):
+        query = _APP_ALIASES.get(target, target)
+        result = dispatch_tool("close_window", {"name": query})
+        return "C'est fermé." if result.get("success") else f"Je ne trouve pas de fenêtre « {target} » ouverte."
+    return None
+
+
 def try_fast_intent(text: str) -> Optional[str]:
-    """Renvoie la reponse a dire si la phrase est une commande courante, sinon None (-> LLM)."""
+    """Renvoie la reponse a dire si la phrase est une commande courante, sinon None (-> LLM).
+    Une phrase composee (« mets la chaine 6 et baisse le volume ») est executee clause par clause."""
+    reminder = reminders.handle(text)          # avant le decoupage : « rappelle-moi de X et de Y » est une seule demande
+    if reminder is not None:
+        return reminder
+    table = _spreadsheet(_norm(text))          # « 4 colonnes et 10 lignes » : ne pas couper sur le « et »
+    if table is not None:
+        return table
+    clauses = [c.strip(" ,.!?") for c in re.split(r"\s*,?\s+(?:et puis|et|puis|ensuite|apres)\s+", text.strip(), flags=re.I)]
+    clauses = [c for c in clauses if c]
+    if len(clauses) < 2:
+        return _fast_single(text)
+    first = _fast_single(clauses[0])
+    if first is None:
+        return _fast_single(text)       # pas une phrase composee de commandes : traitement normal
+    replies = [first]
+    for clause in clauses[1:]:
+        reply = _fast_single(clause)
+        if reply is None:
+            replies.append(f"Par contre je n'ai pas compris : {clause}.")
+        else:
+            replies.append(reply)
+    return " ".join(r for r in replies if r)
+
+
+def _fast_single(text: str) -> Optional[str]:
     t = _norm(text)
 
     if _session:
@@ -145,6 +291,16 @@ def try_fast_intent(text: str) -> Optional[str]:
             return _voice("pause", None)
         if re.search(r"\b(reactive|remets|active|relance)\b.*\b(reconnaissance|verification)\b.*\b(voix|vocale)\b", t):
             return _voice("resume", None)
+
+    folder = _open_folder(t)
+    if folder is not None:
+        return folder
+    opening = _open_app(t)
+    if opening is not None:
+        return opening
+    closing = _close_window(t)
+    if closing is not None:
+        return closing
 
     if _remote_display and re.search(r"telecommande", t):
         if re.search(r"\b(ferme|fermer|cache|cacher|masque|masquer|retire|enleve|efface|supprime)\b", t):
