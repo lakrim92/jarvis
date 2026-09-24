@@ -1,5 +1,36 @@
 """Declaration des outils exposes au LLM (function calling Ollama) + dispatch."""
-from . import apps, web, system, organize
+from . import apps, web, system, organize, lg_tv, freebox_remote
+
+
+def _dispatch_tv_control(args: dict) -> dict:
+    action = args.get("action")
+    value = args.get("value")
+    if action == "set_volume":
+        return lg_tv.tv_set_volume(int(value))
+    if action == "volume_up":
+        return lg_tv.tv_volume_step("up")
+    if action == "volume_down":
+        return lg_tv.tv_volume_step("down")
+    if action == "mute":
+        return lg_tv.tv_mute(True)
+    if action == "unmute":
+        return lg_tv.tv_mute(False)
+    if action == "power_off":
+        return lg_tv.tv_power_off()
+    if action == "launch_app":
+        return lg_tv.tv_launch_app(value)
+    if action == "channel_up":
+        return freebox_remote.fb_button("CHANNELUP", int(value or 1))
+    if action == "channel_down":
+        return freebox_remote.fb_button("CHANNELDOWN", int(value or 1))
+    if action == "goto_channel":
+        return freebox_remote.fb_goto_channel(value)
+    if action == "button":
+        return freebox_remote.fb_button(value)
+    if action == "status":
+        return lg_tv.tv_status()
+    return {"success": False, "error": f"Action TV inconnue : {action}"}
+
 
 TOOLS_SCHEMA = [
     {
@@ -74,6 +105,35 @@ TOOLS_SCHEMA = [
                     "folder": {"type": "string", "description": "Nom ou chemin du dossier a trier (ex: 'Telechargements', 'Images', '~/Downloads')."}
                 },
                 "required": ["folder"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "tv_control",
+            "description": "Controle la television LG (volume TV, son, extinction, applications TV comme Netflix) et la Freebox "
+                           "Player (changer de chaine : suivante, precedente ou numero precis ; navigation) quand tout "
+                           "est deja allume. "
+                           "Ne peut PAS allumer la TV ni la Freebox depuis l'etat eteint.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["set_volume", "volume_up", "volume_down", "mute", "unmute",
+                                 "power_off", "launch_app", "channel_up", "channel_down",
+                                 "goto_channel", "button", "status"],
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "Pour 'set_volume' : niveau 0-100. Pour 'launch_app' : nom de l'application. "
+                                       "Pour 'channel_up'/'channel_down' : nombre de chaines a sauter (defaut 1). "
+                                       "Pour 'goto_channel' : numero de chaine (ex: '6'). "
+                                       "Pour 'button' (Freebox) : UP, DOWN, LEFT, RIGHT, ENTER, BACK, HOME, MENU, INFO, GUIDE, TV, VOLUMEUP, VOLUMEDOWN, MUTE (volume du Player = celui qu'on entend).",
+                    },
+                },
+                "required": ["action"],
             },
         },
     },
@@ -168,6 +228,7 @@ _DISPATCH = {
     "web_search": lambda args: web.web_search(args["query"], args.get("num_results", 5)),
     "get_distance": lambda args: web.get_distance(args["origin"], args["destination"]),
     "organize_folder": lambda args: organize.organize_folder(args["folder"]),
+    "tv_control": lambda args: _dispatch_tv_control(args),
     "get_weather": lambda args: web.get_weather(args.get("city", "")),
     "system_volume": lambda args: system.system_volume(args["action"], args.get("level")),
     "system_brightness": lambda args: system.system_brightness(args["action"], args.get("level")),

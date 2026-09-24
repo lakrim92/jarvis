@@ -86,6 +86,7 @@ class JarvisWindow(QWidget):
 
     user_text_submitted = Signal(str)
     quit_requested = Signal()
+    remote_requested = Signal()
 
     def __init__(self):
         super().__init__()
@@ -139,6 +140,9 @@ class JarvisWindow(QWidget):
         title.setFont(QFont("Sans Serif", 11, QFont.Bold))
         top_bar.addWidget(title)
         top_bar.addStretch()
+        remote_btn = QPushButton("Télécommande")
+        remote_btn.clicked.connect(self.remote_requested.emit)
+        top_bar.addWidget(remote_btn)
         close_btn = QPushButton("x")
         close_btn.setFixedSize(22, 22)
         close_btn.clicked.connect(self.quit_requested.emit)

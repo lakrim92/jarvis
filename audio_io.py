@@ -70,6 +70,8 @@ class WakeWordListener:
 
         silence_run = 0
         speech_started = False
+        peak = 0.0          # niveau moyen le plus eleve observe (la voix)
+        smoothed = 0.0
         with self._q.mutex:
             self._q.queue.clear()
 
@@ -77,11 +79,16 @@ class WakeWordListener:
             chunk = self._q.get()
             frames.append(chunk)
             rms = float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
+            smoothed = 0.5 * smoothed + 0.5 * rms
+            peak = max(peak, smoothed)
+            # Seuil relatif : avec un fond sonore constant (television), le niveau ne tombe jamais sous
+            # un seuil fixe ; on considere la parole finie quand on redescend nettement sous le pic de la voix.
+            threshold = max(config.SILENCE_RMS_THRESHOLD, 0.45 * peak)
 
-            if rms >= config.SILENCE_RMS_THRESHOLD:
+            if smoothed >= max(config.SILENCE_RMS_THRESHOLD, 0.6 * peak):
                 speech_started = True
                 silence_run = 0
-            elif speech_started:
+            elif speech_started and smoothed < threshold:
                 silence_run += 1
                 if silence_run >= silence_frames_needed:
                     break

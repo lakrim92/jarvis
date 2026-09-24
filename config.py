@@ -43,7 +43,7 @@ SAMPLE_RATE = 16000
 FRAME_SIZE = 1280  # 80ms a 16kHz, taille de bloc attendue par openwakeword
 
 # --- Enregistrement de la commande vocale ---
-MAX_COMMAND_SECONDS = 12
+MAX_COMMAND_SECONDS = 8
 SILENCE_DURATION_SECONDS = 1.1
 SILENCE_RMS_THRESHOLD = 350  # empirique sur int16, a ajuster si besoin
 
@@ -60,7 +60,13 @@ Tu as acces a des outils reels pour agir sur la machine : ouvrir des application
 fichiers, trier/ranger un dossier (Telechargements, Images...) par type de fichier, faire \
 des recherches web, calculer une distance/duree de trajet entre deux lieux, controler le \
 volume et la luminosite, verrouiller l'ecran, prendre une capture d'ecran, poser des \
-rappels/minuteurs, donner la date/heure et la meteo. Utilise ces outils des que \
+rappels/minuteurs, donner la date/heure et la meteo, et controler la television LG et la \
+Freebox (volume, changer de chaine, navigation, lancer une appli comme Netflix, eteindre la \
+TV) quand elles sont deja allumees - tu ne peux PAS les allumer depuis l'etat eteint. \
+Tu peux changer de chaine sur la Freebox (suivante, precedente, ou par numero). Numerotation \
+Freebox : TF1=1, France 2=2, France 3=3, Canal+=4, France 5=5, M6=6, Arte=7 ; pour une autre \
+chaine, demande le numero si tu ne le connais pas. \
+Utilise ces outils des que \
 la demande de l'utilisateur l'exige, sans demander la permission pour des actions anodines. \
 Si une action est destructive ou ambigue (supprimer un fichier, eteindre la machine), \
 demande confirmation avant d'agir.

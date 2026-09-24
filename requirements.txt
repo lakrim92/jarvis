@@ -8,3 +8,5 @@ piper-tts
 duckduckgo-search
 python-dotenv
 mss
+aiowebostv
+androidtvremote2

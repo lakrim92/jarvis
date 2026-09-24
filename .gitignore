@@ -11,6 +11,9 @@ training/output/
 training/*.npy
 training/esc50.zip
 
+# Identifiants sensibles (Freebox, TV...)
+.secrets/
+
 # Logs
 logs/*.log
 

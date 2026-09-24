@@ -11,7 +11,10 @@ import config
 from audio_io import WakeWordListener, SpeechTranscriber, Speaker
 from brain import JarvisBrain
 from gui import JarvisWindow
+from intent import register_remote_display, try_fast_intent
+from remote_gui import RemoteWindow
 from tools import register_reminder_callback
+from tools.freebox_remote import register_action_callback as register_freebox_callback
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,6 +31,8 @@ class AssistantWorker(QThread):
     state_changed = Signal(str)
     message_ready = Signal(str, str)  # role, text
     fatal_error = Signal(str)
+    show_remote = Signal()
+    hide_remote = Signal()
 
     def __init__(self):
         super().__init__()
@@ -51,6 +56,8 @@ class AssistantWorker(QThread):
         self.speaker = Speaker()
         self.brain = JarvisBrain()
         register_reminder_callback(self._on_reminder)
+        register_freebox_callback(self.show_remote.emit)
+        register_remote_display(lambda visible: (self.show_remote if visible else self.hide_remote).emit())
         self.listener.start()
         log.info("Jarvis est pret.")
 
@@ -61,9 +68,14 @@ class AssistantWorker(QThread):
         self.state_changed.emit("idle")
 
     def _handle_user_text(self, text: str):
+        log.info("Commande: %s", text)
         self.message_ready.emit("user", text)
         self.state_changed.emit("thinking")
-        reply = self.brain.ask(text)
+        reply = try_fast_intent(text)
+        if reply is not None:
+            log.info("Commande directe -> %s", reply)
+        else:
+            reply = self.brain.ask(text)
         self.message_ready.emit("assistant", reply)
         self.state_changed.emit("speaking")
         self.speaker.say(reply)
@@ -125,7 +137,18 @@ def main():
     app.setQuitOnLastWindowClosed(True)
 
     window = JarvisWindow()
+    remote = RemoteWindow()
     worker = AssistantWorker()
+
+    def open_remote():
+        if not remote.isVisible():
+            remote.place_left_of(window)
+            remote.show()
+        remote.raise_()
+
+    worker.show_remote.connect(open_remote)
+    worker.hide_remote.connect(remote.hide)
+    window.remote_requested.connect(open_remote)
 
     worker.state_changed.connect(window.set_state)
     worker.message_ready.connect(window.append_message)

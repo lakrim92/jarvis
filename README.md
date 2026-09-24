@@ -53,6 +53,25 @@ Ou depuis le menu des applications : cherche **"Jarvis"**.
 - Contrôler le volume et la luminosité
 - Verrouiller l'écran, prendre une capture d'écran (`~/Pictures/Jarvis/`)
 - Poser des rappels/minuteurs vocaux
+- Piloter la télé LG webOS (volume, applis, extinction) et la Freebox Player (chaînes, volume,
+  navigation) avec une télécommande virtuelle cliquable qui s'affiche à l'écran
+  (`ferme la télécommande` / `affiche la télécommande`)
+
+Les commandes courantes (volume, son, chaînes) sont traitées directement, sans passer par le modèle
+(`intent.py`) : c'est instantané. Le volume vise par défaut le Player ; dis « télé » ou « ordinateur »
+pour viser la télé LG ou le PC.
+
+## Télé LG et Freebox Player (à faire une fois)
+
+Les identifiants sont stockés dans `.secrets/` (jamais versionné).
+
+- **Freebox Player** : dans les réglages du Player, active « clavier virtuel à distance »
+  (ouvre le protocole Android TV Remote), puis `python setup/pair_freebox_remote.py <ip_du_player>` :
+  écris le code à 6 caractères affiché sur la télé dans `/tmp/atv_pin`. Le bouton d'alimentation est
+  volontairement bloqué (éteint, le Player n'est plus joignable et ne peut pas être rallumé à distance).
+- **Télé LG webOS** : appairage via `aiowebostv` (accepter la demande affichée sur la télé), le jeton
+  est enregistré dans `.secrets/lg_tv_token.json` (`{"host": ..., "client_key": ...}`).
+- Limite : ni la télé ni la Freebox ne peuvent être allumées depuis l'état éteint.
 
 ## Réglages utiles (`config.py`)
 
